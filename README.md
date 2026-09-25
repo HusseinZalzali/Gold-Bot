@@ -147,7 +147,7 @@ When the EA starts, it **prints the conversion** in the Experts log, for example
 7. Click OK, and make sure the **Algo Trading** button on the toolbar is green.
 8. The dashboard appears in the top-left of the chart, and the **Experts** tab (Toolbox, Ctrl+T) shows the startup summary.
 
-**Symbol detection:** if the `Symbol` input is empty, the EA uses the chart symbol when it contains `XAUUSD`. Otherwise it searches your broker's symbols for one containing `XAUUSD`. If your broker calls gold something else (for example `GOLD`), type that name into the `Symbol` input. Always attach the EA to a chart of the symbol it trades, because it acts on that chart's ticks.
+**Symbol detection:** if the `Symbol` input is empty, the EA uses the chart symbol if it looks like gold (the name contains `XAUUSD` or starts with `GOLD`). Otherwise it searches your broker's symbols for one. You can always type the exact name into the `Symbol` input. If you pick a symbol the EA doesn't recognise as gold, it refuses to start unless you set `Price value of 1 pip` yourself. This prevents a silently wrong pip size. Always attach the EA to a chart of the symbol it trades, because it acts on that chart's ticks.
 
 ---
 
@@ -203,7 +203,7 @@ Visual mode is the best way to understand **why** the bot trades.
 
 | Group | Input | Default | Meaning |
 |-------|-------|---------|---------|
-| Symbol | `InpSymbol` | *(empty)* | Symbol to trade. Empty means the chart symbol, or auto-detect a symbol containing `XAUUSD` |
+| Symbol | `InpSymbol` | *(empty)* | Symbol to trade. Empty means the chart symbol, or auto-detect `XAUUSD*` / `GOLD*` |
 | Symbol | `InpPipSize` | 0 | Price value of 1 pip. 0 means auto (0.10 for gold) |
 | Trend | `InpFastEMAPeriod` | 55 | Fast EMA on H1 |
 | Trend | `InpSlowEMAPeriod` | 200 | Slow EMA on H1 |
@@ -252,7 +252,7 @@ Fixed by design (constants in the code, not inputs):
 | Spread filter | Checked right before entry |
 | Margin check | `OrderCalcMargin`. The trade is skipped if it needs more than 90% of free margin. |
 | Lot validation | Rounded down to the lot step. Must be ≥ broker minimum and ≤ min(broker maximum, safety cap), otherwise skipped. |
-| Broker stop level | If SL/TP is inside the broker's minimum stop distance, the trade is skipped. The SL is never silently widened. |
+| Broker stop level | If SL/TP is inside the broker's minimum stop distance (spread included), the trade is skipped. The SL is never silently widened. |
 | Restart-safe | Daily counters are rebuilt from the account history, so restarting the terminal doesn't reset the limits. |
 | Error handling | Every failed order logs the retcode, its description, the last error, and the lot size, price, SL and TP. |
 
@@ -354,9 +354,10 @@ Good habits:
 * **Simple S/R.** Swing points only: no volume, no multi-timeframe zones, no zone strength scoring. Some valid levels will be missed, and some weak ones used.
 * **The SL is not tied to the zone.** It's a fixed distance from entry, so it can sit inside or outside the support/resistance level depending on the candle.
 * **Server-time day.** Daily limits reset at 00:00 broker server time, which may not match your local time.
+* **Positions carried over midnight:** their whole floating P/L (including yesterday's part) counts towards today's loss limit, and their close counts as today's realized result. This errs on the cautious side.
 * **Daily stats count only this EA's trades** (by magic number and symbol). The position limit counts **all** positions on the symbol.
 * **Weekend gaps and news spikes** can fill an SL at a worse price than planned, so real losses can exceed the planned risk.
-* **Commission is not included in lot sizing** (only in the daily P/L), so the real risk per trade is slightly higher on commission accounts.
+* **Commission is not included in lot sizing**, and the floating P/L doesn't include the exit commission, so the real risk per trade is slightly higher on commission accounts.
 * **Risk % uses balance**, not equity.
 * **Evaluation happens on the first tick after an M15 candle closes.** On a quiet market that tick can arrive a little late.
 * **Tester limitations:** the tester's spread and slippage model is simplified and can't reproduce your broker's real execution.

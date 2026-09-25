@@ -187,6 +187,12 @@ int OnInit()
       Print("INIT FAILED: invalid point size for ", g_symbol);
       return(INIT_FAILED);
      }
+   if(InpPipSize <= 0.0 && !IsGoldSymbol(g_symbol))
+     {
+      Print("INIT FAILED: '", g_symbol, "' is not recognised as gold, so the pip size cannot be detected safely. ",
+            "Set 'Price value of 1 pip' manually (0.10 is the usual gold pip).");
+      return(INIT_PARAMETERS_INCORRECT);
+     }
    g_pipSize = DeterminePipSize();
    if(g_pipSize < g_point)
      {
@@ -252,7 +258,7 @@ void OnTick()
    if(IsNewM15Bar())
       EvaluateNewBar();
 
-   if(InpShowDashboard && !g_isFastTester && TimeCurrent() - g_lastDashUpdate >= 1)
+   if(InpShowDashboard && !g_isFastTester && TimeCurrent() - g_lastDashUpdate >= 5)
       UpdateDashboard();
   }
 
@@ -855,6 +861,16 @@ void CalculateDailyStats(DailyStats &stats)
 
          if(entry == DEAL_ENTRY_IN)
            {
+            bool known = false;
+            for(int k = 0; k < entryCount; k++)
+               if(entryPositionIds[k] == positionId)
+                 {
+                  entryCosts[k] += net;   // extra fill of the same position
+                  known = true;
+                  break;
+                 }
+            if(known)
+               continue;
             stats.tradesToday++;
             ArrayResize(entryPositionIds, entryCount + 1);
             ArrayResize(entryCosts, entryCount + 1);
@@ -1163,14 +1179,7 @@ bool OpenTrade(bool isBuy, const string reason)
    double slDist    = PipsToPrice(slPips);
    double tpDist    = PipsToPrice(InpTakeProfitPips);
 
-   // Broker minimum stop distance - we never silently change the SL, we skip instead
    double minStopDist = (double)SymbolInfoInteger(g_symbol, SYMBOL_TRADE_STOPS_LEVEL) * g_point;
-   if(slDist <= minStopDist || tpDist <= minStopDist)
-     {
-      LogDecision(StringFormat("NO TRADE: %s blocked - SL/TP distance is inside the broker's minimum stop level (%.1f pips).",
-                               direction, minStopDist / g_pipSize), true);
-      return(false);
-     }
 
    for(int attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt++)
      {
@@ -1186,6 +1195,16 @@ bool OpenTrade(bool isBuy, const string reason)
       if(!SymbolInfoTick(g_symbol, tick) || tick.ask <= 0.0 || tick.bid <= 0.0)
         {
          LogDecision("NO TRADE: " + direction + " aborted - no valid price quote.", true);
+         return(false);
+        }
+
+      // Broker minimum stop distance. The broker measures a BUY's SL from Bid (SELL's from Ask),
+      // so the spread eats into it. We never silently change the SL - we skip instead.
+      double spread = tick.ask - tick.bid;
+      if(slDist - spread <= minStopDist || tpDist <= minStopDist)
+        {
+         LogDecision(StringFormat("NO TRADE: %s blocked - SL/TP distance is inside the broker's minimum stop level (%.1f pips + %.1f pips spread).",
+                                  direction, minStopDist / g_pipSize, spread / g_pipSize), true);
          return(false);
         }
 
@@ -1347,11 +1366,11 @@ bool IsGoldSymbol(const string name)
   {
    string upper = name;
    StringToUpper(upper);
-   return(StringFind(upper, "XAUUSD") >= 0);
+   return(StringFind(upper, "XAUUSD") >= 0 || StringFind(upper, "GOLD") == 0);
   }
 
 //+------------------------------------------------------------------+
-//| Symbol resolution: input -> chart symbol -> search for XAUUSD*   |
+//| Symbol resolution: input -> chart symbol -> search for gold      |
 //+------------------------------------------------------------------+
 string ResolveSymbol()
   {
@@ -1389,11 +1408,7 @@ double DeterminePipSize()
   {
    if(InpPipSize > 0.0)
       return(InpPipSize);
-   if(IsGoldSymbol(g_symbol))
-      return(0.10);
-   if(g_digits == 3 || g_digits == 5)
-      return(g_point * 10.0);
-   return(g_point);
+   return(0.10);   // OnInit only reaches here for recognised gold symbols
   }
 
 //+------------------------------------------------------------------+
