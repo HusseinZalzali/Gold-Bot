@@ -1,17 +1,38 @@
-# GoldBot V1: Simple XAUUSD Expert Advisor for MetaTrader 5
+# GoldBot V2: Simple XAUUSD Expert Advisor for MetaTrader 5
 
-GoldBot is a small, rule-based Expert Advisor (EA) for MetaTrader 5 that trades gold (XAUUSD). It is built so you can **read and understand every decision it makes**. It looks for a small number of quality setups, and if nothing qualifies it does nothing.
+GoldBot is a rule-based Expert Advisor (EA) for trading gold (XAUUSD) in MetaTrader 5. **V2** keeps the V1 core and adds better trade selection, volatility awareness, simple trade management and statistics. It stays small enough that you can read every rule and understand every decision.
+
+The bot doesn't try to predict where gold will go. It only says:
+
+> "The market is trending bullish" + "price reached an area that mattered before" + "price reacted bullishly" + "entry conditions are acceptable" + "risk is acceptable". **Then it trades. Otherwise it waits.**
 
 > ⚠️ **Important: read before using**
 >
-> * This EA is for **demo testing and learning**. It is **not** a proven or profitable strategy, and nothing here says it will make money.
-> * A profitable backtest does **not** mean the strategy works. Backtests can be **overfit** to past data.
-> * **Past performance does not guarantee future results.**
-> * **Demo forward testing is required** before you even think about real money.
-> * **Spread, slippage, commission and execution quality** change results, sometimes a lot. They matter even more with a small stop loss.
-> * **XAUUSD can move violently around major news** (NFP, CPI, FOMC, geopolitical events). Price can jump through stop losses.
-> * A **high risk/reward ratio (1:5) does not guarantee profitability.** With 1:5 you can lose most of your trades and still break even, but if the win rate is too low the account still loses money.
-> * You are fully responsible for anything you do with this code.
+> * This EA is for **demo testing and learning**. **Nothing here claims V2 is profitable.**
+> * A profitable backtest does **not** prove the strategy works, because backtests can be **overfit**.
+> * **Past performance does not guarantee future results.** Demo forward testing is **required**.
+> * **Spread, slippage and commission** change results. **XAUUSD moves violently around major news.**
+> * A **high risk/reward ratio does not guarantee profitability.**
+> * There's no martingale, grid, averaging down, hedging, recovery logic, AI or machine learning, and it never forces trades.
+
+---
+
+## Contents
+1. [Project structure](#1-project-structure)
+2. [What changed from V1](#2-what-changed-from-v1)
+3. [Exact V2 trading rules](#3-exact-v2-trading-rules)
+4. [Quality score](#4-quality-score)
+5. [Stop loss, take profit and trade management](#5-stop-loss-take-profit-and-trade-management)
+6. [Risk and daily protection](#6-risk-and-daily-protection)
+7. [XAUUSD pips](#7-xauusd-pips)
+8. [Installation](#8-installation)
+9. [Backtesting](#9-backtesting)
+10. [Out-of-sample testing](#10-out-of-sample-testing-read-this)
+11. [Statistics, dashboard and logs](#11-statistics-dashboard-and-logs)
+12. [Example backtest interpretation](#12-example-backtest-interpretation)
+13. [Recommended demo testing procedure](#13-recommended-demo-testing-procedure)
+14. [All parameters](#14-all-parameters)
+15. [Known limitations](#15-known-limitations)
 
 ---
 
@@ -19,352 +40,452 @@ GoldBot is a small, rule-based Expert Advisor (EA) for MetaTrader 5 that trades 
 
 ```
 Gold-Bot/
-├── README.md                          ← this file
+├── README.md                          ← this file (V2)
+├── docs/
+│   └── README_V1.md                   ← V1 documentation (reference)
 └── MQL5/
     └── Experts/
         └── GoldBot/
-            └── GoldBot.mq5            ← the complete EA (single file)
+            ├── GoldBotV2.mq5          ← V2 EA (use this)
+            └── GoldBot.mq5            ← V1 EA (kept as a baseline for comparison)
 ```
 
-The folder layout matches the MetaTrader 5 data folder, so you can copy `MQL5/Experts/GoldBot/` straight into your terminal.
+V1 and V2 use **different default magic numbers** (55200125 and 55200226), so you can run and compare both on demo without them mixing statistics. The one-position rule still counts **all** positions on the gold symbol, so they won't stack on the same account.
 
 ---
 
-## 2. Exact trading rules
+## 2. What changed from V1
 
-The EA evaluates **once per closed M15 candle**, on the first tick of the new candle. It never evaluates on every tick, so one candle can only give one decision.
+| Area | V1 | V2 |
+|------|----|----|
+| Trend | H1 EMA 55/200 | **Same** (required), now graded as *strong* (close beyond both EMAs) or *pullback* (close between the EMAs) |
+| Support/resistance | Nearest single swing | **Zones**: nearby unbroken swings are merged, and a zone with 2+ reactions scores higher |
+| Confirmation | Rejection / engulfing / strong close | Same patterns, but the candle **must close in the trade direction**, and its size is measured against ATR |
+| Entry timing | none | **M15 EMA 9**: close above it for BUY, below it for SELL |
+| Volatility | Fixed minimum candle size | **M15 ATR** filter: minimum ATR (dead market) and optional maximum ATR (chaos) |
+| Chasing | none | **Max distance from zone**: if price has already run away, it waits |
+| Stop loss | Fixed 25 pips | **Fixed or ATR-based**, pushed **beyond the zone** when that's further, and the trade is **rejected** if the SL would exceed **Max SL** |
+| Take profit | Fixed 125 pips | **Risk:reward multiple** (default 4R) |
+| Trade management | none | **Break-even** at +1R (on by default), optional **ATR trailing stop** (off by default) |
+| Trading hours | One window | **Sessions**: London / New York / London+NY / Custom |
+| Daily protection | Loss %, consecutive losses, trades/day | Same, plus a **daily profit boundary** and a **cooldown after a loss** |
+| Direction | Both | **AllowBuy / AllowSell** switches |
+| Position sizing | Risk % of balance | Risk % of the **lower of balance and equity** |
+| Decision quality | all-or-nothing | **0–100 score** with a minimum score |
+| Logging | One line per decision | **Full checklist** for every potential trade |
+| Statistics | Today only | **Full statistics** (overall, BUY/SELL, per session), printed when the EA stops, plus a **CSV trade list** |
 
-A trade needs **all three** of these (they're all required):
-
-| # | Component | Required? |
-|---|-----------|-----------|
-| 1 | H1 trend | **Required** |
-| 2 | M15 support/resistance zone | **Required** |
-| 3 | M15 price-action confirmation | **Required** |
-
-### 2.1 Trend (H1)
-Calculated on the **last closed H1 candle**, so the value doesn't flicker while a candle is forming:
-
-| Environment | Condition |
-|-------------|-----------|
-| **BULLISH** (only BUYs allowed) | H1 close > EMA 200 **and** EMA 55 > EMA 200 |
-| **BEARISH** (only SELLs allowed) | H1 close < EMA 200 **and** EMA 55 < EMA 200 |
-| **NEUTRAL** (no trades) | Anything else (mixed signals) |
-
-### 2.2 Support / resistance (M15)
-Built from simple **swing points** (fractals):
-
-* A **swing low** is a candle whose low is lower than the `Swing strength` (default 3) candles on each side.
-* A **swing high** is the mirror image.
-* Only swings from the last `Swing lookback` (default 100) M15 candles are used.
-* A swing only counts if it formed **before** the last two candles. The candles being tested can't create their own level.
-* A level is thrown out as **broken** if any later candle **closed** through it.
-* **Support** = the nearest valid swing low **below** the confirmation candle's close.
-* **Resistance** = the nearest valid swing high **above** the confirmation candle's close.
-
-**Near the zone (BUY):** the lowest low of the last 2 closed candles must be within `Zone tolerance` (default 10 pips) of support, above or below it. If price went **more** than the tolerance below support, the level is treated as broken and there's no trade.
-**Near the zone (SELL):** the mirror image, using the highest high and resistance.
-
-### 2.3 Confirmation (M15, the candle that just closed)
-The candle must be at least `Min candle range` (default 10 pips) from high to low. **Any one** of these is enough:
-
-| BUY confirmation | SELL confirmation |
-|------------------|-------------------|
-| **Bullish engulfing:** previous candle bearish, current candle bullish, and its body covers the previous body | **Bearish engulfing:** the mirror image |
-| **Bullish rejection:** lower wick ≥ 50% of the range, upper wick ≤ 25%, and the wick reached the support zone | **Bearish rejection:** upper wick ≥ 50%, lower wick ≤ 25%, and the wick reached resistance |
-| **Strong bullish close:** bullish body ≥ 60% of the range, closing in the top 20% of the candle | **Strong bearish close:** bearish body ≥ 60%, closing in the bottom 20% |
-
-The shape thresholds (50% / 25% / 60% / 20%) are constants near the top of the source file (`REJECTION_WICK_MIN` and so on), so there are fewer inputs to manage. You can edit them there.
-
-### 2.4 Decision order on each new M15 candle
-1. New M15 candle detected
-2. H1 trend. If NEUTRAL, then **NO TRADE**
-3. Support/resistance zone. If not near a zone, then **NO TRADE**
-4. Confirmation candle. If none, then **NO TRADE**
-5. Spread ≤ `Max spread`. If too high, then **NO TRADE**
-6. Daily risk limits (daily loss, consecutive losses, trades per day). If hit, then **NO TRADE**
-7. Trading hours and news blackout. If outside the allowed time, then **NO TRADE**
-8. No XAUUSD position already open. If one is open, then **NO TRADE**
-9. Terminal, account and symbol allow trading. Lot size is valid. Margin is enough. **Then open ONE trade** at market.
-
-### 2.5 Exits
-* A **fixed SL and TP** are attached to the order when it's sent.
-* V1 **never changes SL or TP** after entry: no trailing, no break-even, no partial closes.
-* The EA never closes trades early. They end at SL, TP, or when you close them by hand.
+Unchanged: one evaluation per closed M15 candle, **maximum one open position**, max spread filter, manual news blackout, lots never rounded up, safety lot cap, margin check, and restart-safe counters.
 
 ---
 
-## 3. XAUUSD pips (read this carefully)
+## 3. Exact V2 trading rules
 
-Brokers quote gold with different numbers of digits (for example `2350.12` or `2350.123`). The EA **does not** treat a "pip" as one point. It uses a price-based definition:
+The EA evaluates **once per closed M15 candle**, on the first tick of the next candle. The candle is marked as processed **before** evaluation, so no candle can be traded twice.
 
-> **1 pip = 0.10 in price** (the common convention for gold). Example: 2350.00 → 2350.10 is 1 pip.
+### Step 1: H1 trend (required)
+Uses the **last closed H1 candle**:
 
-It then converts to the broker's points automatically:
+| Environment | Condition | Grade |
+|-------------|-----------|-------|
+| BULLISH (BUY only) | H1 close > EMA 200 **and** EMA 55 > EMA 200 | *strong* if the close is also > EMA 55, otherwise *pullback* |
+| BEARISH (SELL only) | H1 close < EMA 200 **and** EMA 55 < EMA 200 | *strong* if the close is also < EMA 55, otherwise *pullback* |
+| NEUTRAL | anything else | **no trade** |
 
-| Broker digits | Point | 1 pip (0.10) = |
-|---------------|-------|----------------|
-| 2 (2350.12) | 0.01 | 10 points |
-| 3 (2350.123) | 0.001 | 100 points |
+If the direction is switched off (`AllowBuy` / `AllowSell`), the EA waits.
 
-So with the defaults:
+### Step 2: Support/resistance zone (required)
+1. Find M15 **swing lows** (for BUY) or **swing highs** (for SELL). A swing is a candle whose low (high) is beyond the `Swing strength` (3) candles on each side, within the last `Swing lookback` (150) candles.
+2. Ignore swings that are **broken**, meaning a later candle **closed** through them.
+3. Ignore swings that aren't fully formed before the last two candles, so the tested candles can't create their own level.
+4. **Merge** swings that are within `Zone merge` (15 pips) of each other into one zone. Each merged swing is one *reaction*.
+5. For a **BUY**, use the nearest support zone below the last close. For a **SELL**, use the nearest resistance zone above it.
+6. **Reached:** the last two candles must have come within `Zone distance` (20 pips) of the zone.
+7. **Not broken:** they must not have pierced more than `Zone distance` beyond the far edge of the zone.
 
-| Setting | Pips | Price distance |
-|---------|------|----------------|
-| Stop Loss | 25 | **$2.50** |
-| Take Profit | 125 | **$12.50** |
-| Wider test SL | 40 | $4.00 |
-| Max spread | 5 | $0.50 |
-| Zone tolerance | 10 | $1.00 |
+If price hasn't reached a zone, there's no potential trade. The EA logs a short `WAIT:` line and stops there.
 
-When the EA starts, it **prints the conversion** in the Experts log, for example: `1 pip = 0.10 price = 10.0 points (auto)`. Always check this line.
+### Step 3: Full checklist (only when a zone was reached)
+Every check below is evaluated, even after one fails, so the log shows the full picture:
 
-**If you use a different pip definition** (some traders call $1.00 a pip), set `Price value of 1 pip` (`InpPipSize`) to `1.0`. **Every** pip-based input (SL, TP, spread, slippage, zone tolerance, min candle range) then uses that unit, so change all of them to match. For example, a max spread of 5 would then mean $5, which is far too large.
+| Check | BUY rule | SELL rule | Required |
+|-------|----------|-----------|----------|
+| **Candle** | Closes **bullish**, is at least 50% of ATR in size, **and** is a bullish rejection (lower wick ≥ 50% of the range, upper wick ≤ 30%, wick reached the zone), a bullish engulfing, or a strong bullish candle (body ≥ 60%, closes in the top 25%) | Mirror image | Yes |
+| **EMA 9** | Close > M15 EMA 9 | Close < M15 EMA 9 | Yes (default). If `Require EMA confirm` = false it only affects the score. |
+| **ATR** | `Min ATR` ≤ ATR ≤ `Max ATR` | same | Yes |
+| **Entry (no chasing)** | Ask is at most `Max distance from zone` (30 pips) above the zone top | Bid is at most 30 pips below the zone bottom | Yes |
+| **Stop loss** | The calculated SL is ≤ `Max SL` and outside the broker's minimum stop distance | same | Yes |
+| **Spread** | ≤ `Max spread` | same | Yes |
+| **Score** | ≥ `Min score` | same | Yes |
+| **Time** | Inside the selected session and not in the news blackout | same | Yes |
+| **Risk** | Daily trading not stopped, and not in cooldown | same | Yes |
+| **Position** | No gold position open | same | Yes |
 
-> **Reality check:** a 25-pip ($2.50) stop is **small** compared with typical M15 gold volatility, and the spread alone can be 10–20% of it. Expect many trades to be stopped out by normal noise. That's exactly why the `Use wider test SL` option exists. Test both.
-
----
-
-## 4. Installation and compiling
-
-1. Open MetaTrader 5, then **File → Open Data Folder**.
-2. Copy `MQL5/Experts/GoldBot/GoldBot.mq5` from this repository into `<Data Folder>/MQL5/Experts/GoldBot/`.
-3. Open **MetaEditor** (press F4 in MT5, or Tools → MetaQuotes Language Editor).
-4. In the Navigator, open `Experts/GoldBot/GoldBot.mq5`.
-5. Press **F7** (Compile). The *Errors* tab should show `0 errors`. A file `GoldBot.ex5` is created next to the source.
-6. Back in MT5, right-click **Expert Advisors** in the Navigator and choose **Refresh**. *GoldBot* appears in the list.
-
----
-
-## 5. Attaching to a chart (demo account)
-
-1. Log in to a **DEMO** account.
-2. Open **Market Watch** (Ctrl+M) and make sure your gold symbol is visible (`XAUUSD`, `XAUUSDm`, `XAUUSD.a`, `GOLD`, and so on).
-3. Open a chart of that symbol. **M15 is recommended**, although the EA always reads M15 and H1 itself whatever the chart timeframe.
-4. Drag *GoldBot* onto the chart.
-5. On the **Common** tab, tick **Allow Algo Trading**.
-6. On the **Inputs** tab, review the settings (see section 8).
-7. Click OK, and make sure the **Algo Trading** button on the toolbar is green.
-8. The dashboard appears in the top-left of the chart, and the **Experts** tab (Toolbox, Ctrl+T) shows the startup summary.
-
-**Symbol detection:** if the `Symbol` input is empty, the EA uses the chart symbol if it looks like gold (the name contains `XAUUSD` or starts with `GOLD`). Otherwise it searches your broker's symbols for one. You can always type the exact name into the `Symbol` input. If you pick a symbol the EA doesn't recognise as gold, it refuses to start unless you set `Price value of 1 pip` yourself. This prevents a silently wrong pip size. Always attach the EA to a chart of the symbol it trades, because it acts on that chart's ticks.
+**All must pass.** Then the EA checks terminal/account permissions, calculates the lot, checks margin, and sends **one** market order with SL and TP attached.
 
 ---
 
-## 6. Backtesting in the Strategy Tester
+## 4. Quality score
 
-1. In MT5, open **View → Strategy Tester** (Ctrl+R).
+The score is a **simple checklist total**, not AI. Trend, zone and candle are **required** anyway. The score grades **how good** each one is, so the minimum score can filter out weak combinations.
+
+| Component | Points |
+|-----------|--------|
+| Trend: strong (H1 close beyond both EMAs) | 30 |
+| Trend: pullback (H1 close between EMA 55 and EMA 200) | 15 |
+| Zone: 2+ swing reactions | 25 |
+| Zone: single swing | 10 |
+| Candle: rejection or engulfing | 20 |
+| Candle: strong directional candle | 10 |
+| EMA 9 confirmation | 15 |
+| ATR inside limits | 10 |
+| **Maximum** | **100** |
+
+With the defaults (EMA 9 required, minimum score **70**):
+
+| Example | Score | Trades? |
+|---------|-------|---------|
+| strong trend + multi-reaction zone + rejection | 30+25+20+15+10 = **100** | yes |
+| strong trend + single swing + strong candle | 30+10+10+15+10 = **75** | yes |
+| pullback trend + single swing + rejection | 15+10+20+15+10 = **70** | yes |
+| pullback trend + single swing + strong candle | 15+10+10+15+10 = **60** | **no** |
+
+Raise `Min score` to 80 or 85 to only take the cleaner combinations. Compare the results in backtests **without** tuning it to one period.
+
+---
+
+## 5. Stop loss, take profit and trade management
+
+### Stop loss
+1. **Base distance:**
+   * `Fixed pips` mode: `Fixed SL` (25 pips).
+   * `ATR` mode (**default**): ATR × `ATR SL multiplier` (1.0).
+2. **Structure** (`Use structure SL` = true): the SL is placed beyond the zone and the last two candles, plus `SL buffer` (5 pips), **if that is further away** than the base distance.
+   * BUY: `min(zone bottom, low of the last 2 candles) − buffer`
+   * SELL: `max(zone top, high of the last 2 candles) + buffer`
+3. **Maximum:** if the final SL is larger than `Max SL` (80 pips), then **NO TRADE**. The EA never widens the stop to fit a bad setup.
+
+### Take profit
+`TP distance = SL distance × Risk reward` (default **4.0**, allowed 1–10). For example, a 40-pip SL gives a 160-pip TP. TP is **never** changed after entry.
+
+### Break-even (on by default)
+When the trade is `Break-even at R` (1.0R) in profit, the SL moves to **entry ± `Break-even buffer`** (2 pips). It happens once, and the SL never moves back.
+
+### Trailing stop (off by default)
+If enabled, it starts at `Trail start R` (2.0R) profit, and the SL follows price at **ATR × `Trail ATR multiplier`** (2.0 × ATR). It only moves in the trade's favour, in steps of at least 10% of the initial risk, so it doesn't react to tiny moves.
+
+Management runs on every tick for this EA's position only. If the broker's stop/freeze level blocks a change, it quietly tries again on a later tick. After a failed modification it waits 30 s.
+
+---
+
+## 6. Risk and daily protection
+
+### Lot size
+* **Risk mode (default):** lots = (lower of balance and equity × `Risk %`) ÷ (money lost per 1.00 lot at the SL). The money per lot comes from `OrderCalcProfit`, which uses the broker's tick size and tick value, so it's correct whatever digits the broker uses.
+* **Fixed mode:** `Fixed lot`.
+* Lots are rounded **down** to the lot step, capped at min(broker maximum, `Max lot` safety cap), and **skipped** if below the broker minimum (never rounded up). Margin must be ≤ 90% of free margin.
+* A wider (ATR/structure) SL means a **smaller lot**, so the money at risk stays the same.
+
+### Daily limits (reset at 00:00 broker server time)
+| Limit | Default | Effect |
+|-------|---------|--------|
+| Max daily loss | 2% | Realized + floating P/L ≤ −2% of the day-start balance: **stop for the day** |
+| Daily profit boundary | 3% | Realized + floating ≥ +3%: **stop for the day**. This is a boundary, not a target, and nothing is forced to reach it. |
+| Max consecutive losses | 3 | 3 losing trades in a row today: **stop for the day** |
+| Max trades per day | 3 | Stop opening trades after 3 today |
+| Cooldown after loss | 30 min | After any losing trade, no new entries for 30 minutes. After that, a **completely new valid setup** is still required. |
+
+"Stop for the day" is **latched** until the next server day. Open trades continue under their normal SL/TP and break-even. All counters are rebuilt from the account history, so restarting the terminal doesn't reset them.
+
+### Hard safety rules
+* Maximum **1** open gold position (any magic number, including manual trades).
+* One evaluation per M15 candle. Open positions are re-checked right before every send. Orders are sent synchronously. At most one retry, and only for requote or price-changed errors.
+* No martingale, grid, averaging down, hedging or recovery sizing. The lot never depends on previous results.
+
+---
+
+## 7. XAUUSD pips
+
+**1 pip = 0.10 in price** (for example 2350.00 → 2350.10). The EA converts this to broker points automatically: 10 points on a 2-digit quote, or 100 points on a 3-digit quote. Every pip input (SL, max SL, ATR limits, zone distances, spread, slippage, buffers) uses the same unit. The startup log prints `1 pip = 0.10 price = N points`, so always check it.
+
+| Pips | Price move |
+|------|-----------|
+| 20 | $2.00 |
+| 25 | $2.50 |
+| 80 | $8.00 |
+| 160 | $16.00 |
+
+Gold symbols (`XAUUSD*`, `GOLD*`) are detected automatically. For any other name, the EA refuses to start unless you set `Price value of 1 pip` yourself. If you prefer a different pip definition, set that input and **rescale every pip input**.
+
+**Calibrate the ATR limits for your period.** With gold at $2,000–4,000, M15 ATR is often 20–80 pips. The defaults (15 min / 120 max) are only a starting point. Check the `ATR` line in the setup log or on the dashboard.
+
+---
+
+## 8. Installation
+
+1. MT5: **File → Open Data Folder**.
+2. Copy `MQL5/Experts/GoldBot/GoldBotV2.mq5` into `<Data Folder>/MQL5/Experts/GoldBot/`.
+3. Open **MetaEditor** (F4), open the file and press **F7** (Compile). You should see **0 errors**.
+4. In MT5's Navigator, right-click **Expert Advisors** and choose **Refresh**.
+5. Log in to a **DEMO** account and open a chart of your gold symbol. M15 is recommended; the EA reads M15 and H1 itself.
+6. Drag **GoldBotV2** onto the chart. On the **Common** tab tick **Allow Algo Trading**, review the **Inputs**, then click OK.
+7. The toolbar **Algo Trading** button must be green. The dashboard appears top-left, and the startup summary appears in **Toolbox → Experts**.
+
+**Check your broker's server time.** The Market Watch clock shows it. Sessions and the news blackout use **server time**. The default session times assume a common **GMT+2 / GMT+3** server:
+
+| Session | Default (server) | Roughly in GMT |
+|---------|------------------|----------------|
+| London | 10:00–19:00 | 07/08:00–16/17:00 |
+| New York | 15:00–22:00 | 12/13:00–19/20:00 |
+
+If your server runs on GMT, subtract 2–3 hours.
+
+---
+
+## 9. Backtesting
+
+1. **View → Strategy Tester** (Ctrl+R).
 2. Settings:
-   * **Expert:** `GoldBot\GoldBot`
+   * **Expert:** `GoldBot\GoldBotV2`
    * **Symbol:** your gold symbol
    * **Timeframe:** M15
-   * **Date:** start with 6–12 months, for example the last full year
-   * **Modelling:** **Every tick based on real ticks** (most realistic). "Every tick" is acceptable. Avoid "Open prices only", because it misses intra-candle SL/TP hits.
-   * **Deposit / Leverage:** match your planned demo account (for example 10,000 USD, 1:100)
-   * **Optimization:** **Disabled**. Don't optimize V1. Understand it first.
-3. On the **Inputs** tab, check the parameters.
-4. Click **Start**.
-5. When it finishes, look at the **Backtest** (report), **Graph** and **Journal** tabs.
+   * **Modelling:** **Every tick based on real ticks** (preferred) or *Every tick*. Don't use *Open prices only*, because break-even and SL/TP need intra-candle prices.
+   * **Deposit and leverage:** the same as your planned demo account
+   * **Optimization: Disabled**
+3. Tick **Visualize** to watch decisions candle by candle, with the dashboard and the Journal.
+4. When the test finishes, read the **Backtest** report, the **Graph**, and the **Journal**. The Journal ends with the V2 statistics report (section 11).
 
-The tester needs history for the M15 **and** H1 timeframes, plus about 200 H1 candles before your start date for EMA 200. MT5 downloads these automatically. If the first days show `H1 indicator data not ready`, that's normal warm-up.
+The EA needs about 200 H1 candles before the start date for EMA 200. MT5 loads them automatically. `WAIT: H1 indicator data not ready yet` on the first day is normal.
 
-### Visual mode
-Tick **Visualize** (Visual mode) before clicking Start. A chart opens and replays the market with the dashboard. You can:
-* Slow down or pause the replay to watch each decision.
-* Add EMA 55 and EMA 200 on an H1 chart to see the trend yourself.
-* Read the **Journal** tab of the visual window: every closed M15 candle logs a `NO TRADE: ...` reason (with `Verbose log` on) or a `TRADE: ...` block.
+### Tests worth running (one change at a time)
+| Question | How |
+|----------|-----|
+| Different years and market conditions | Same settings on 2021, 2022, 2023, 2024, 2025 separately |
+| SL mode | `Stop loss mode` = Fixed vs ATR |
+| Risk:reward | `Risk reward` = 2, 3, 4, 5 |
+| Sessions | `Trading session` = London / New York / London+NY |
+| Direction | `Allow SELL` = false (BUY only), then `Allow BUY` = false (SELL only) |
+| Score filter | `Min score` = 70 / 80 / 90 |
+| Management | Break-even on vs off; trailing on vs off |
+| Costs | Set a higher fixed spread in the tester and see whether results survive |
 
-Visual mode is the best way to understand **why** the bot trades.
-
----
-
-## 7. Common changes
-
-| I want to... | Change this input |
-|--------------|-------------------|
-| Change the stop loss | `Stop Loss (pips)` (`InpStopLossPips`) |
-| Test a wider stop | Set `Use the wider test Stop Loss` = true and `Wider Stop Loss for testing (pips)` = e.g. 40 |
-| Change the take profit | `Take Profit (pips)` (`InpTakeProfitPips`) |
-| Risk a different % per trade | `Risk per trade (%)` (`InpRiskPercent`), e.g. 0.25 = a quarter of 1% |
-| Use a fixed lot instead | `Lot size mode` = *Fixed lot size*, and set `Fixed lot size` |
-| Allow bigger lots | Raise `Safety cap` (`InpMaxLotSize`). Be careful. |
-| Change the EMA trend filter | `Fast EMA period` (55) / `Slow EMA period` (200) |
-| Change trading hours | `Trading start/end hour/minute` (server time; the end time is not included) |
-| Block trading around a news release | `Enable manual news blackout` = true, then set the start/end time for that day |
-| Reduce log noise | `Verbose log` = false (blocked setups, trades and errors are still logged) |
-
-**Risk mode example:** with a balance of 10,000 USD and 0.25% risk, the risk budget is 25 USD. With a 25-pip ($2.50) SL on a standard 100-oz contract, 1.00 lot loses about $250, so the EA uses **0.10 lots**. Lots are always rounded **down** to the broker's lot step. If the result is below the broker's minimum lot, the trade is **skipped**, never rounded up.
-
-**Fixed mode warning:** in fixed mode the risk per trade is `lot × SL`, however large that is. The `TRADE:` log line shows the money at risk and the % of balance, so check it. A lot size too large for the SL can hit the daily loss limit with one trade.
+**Don't** use the optimizer to search hundreds of combinations. With enough combinations, *something* always looks good on past data by pure luck.
 
 ---
 
-## 8. All configurable parameters
+## 10. Out-of-sample testing (read this)
 
-| Group | Input | Default | Meaning |
-|-------|-------|---------|---------|
-| Symbol | `InpSymbol` | *(empty)* | Symbol to trade. Empty means the chart symbol, or auto-detect `XAUUSD*` / `GOLD*` |
-| Symbol | `InpPipSize` | 0 | Price value of 1 pip. 0 means auto (0.10 for gold) |
-| Trend | `InpFastEMAPeriod` | 55 | Fast EMA on H1 |
-| Trend | `InpSlowEMAPeriod` | 200 | Slow EMA on H1 |
-| S/R | `InpSwingStrength` | 3 | Candles on each side that define a swing high/low |
-| S/R | `InpSwingLookbackBars` | 100 | How many M15 candles back to search for swings (100 ≈ 25 hours) |
-| S/R | `InpZoneTolerancePips` | 10 | Maximum distance between price and the level to count as "at the zone" |
-| S/R | `InpMinCandleRangePips` | 10 | Minimum high-low size of a confirmation candle |
-| SL/TP | `InpStopLossPips` | 25 | Stop loss |
-| SL/TP | `InpTakeProfitPips` | 125 | Take profit (1:5 with the default SL) |
-| SL/TP | `InpUseWiderStopLoss` | false | Use the wider SL below instead |
-| SL/TP | `InpWiderStopLossPips` | 40 | Wider SL for testing. Lot size adapts, so money risk stays the same in risk mode |
-| Lots | `InpLotMode` | Risk-based | *Risk-based* or *Fixed lot size* |
-| Lots | `InpRiskPercent` | 0.25 | % of balance risked per trade (risk mode). Allowed range 0–5 |
-| Lots | `InpFixedLotSize` | 0.01 | Lot size in fixed mode |
-| Lots | `InpMaxLotSize` | 1.00 | Hard safety cap on any order's lot size |
-| Daily | `InpMaxDailyLossPercent` | 2.0 | Stop new trades for the day when realized + floating P/L ≤ −2% of the day-start balance |
-| Daily | `InpMaxConsecutiveLosses` | 3 | Stop for the day after 3 losses in a row (counted within the day) |
-| Daily | `InpMaxTradesPerDay` | 3 | Maximum new trades per day |
-| Execution | `InpMaxSpreadPips` | 5 | No trade if the spread is larger than this |
-| Execution | `InpMaxSlippagePips` | 3 | Maximum accepted slippage (deviation) on market orders |
-| Execution | `InpMagicNumber` | 55200125 | Identifies this EA's trades. Use a different number per chart/EA |
-| Execution | `InpTradeComment` | GoldBot V1 | Order comment |
-| Hours | `InpStartHour` / `InpStartMinute` | 08:00 | Trading window start (server time) |
-| Hours | `InpEndHour` / `InpEndMinute` | 20:00 | Trading window end, not included. Start = end means all day |
-| News | `InpNewsFilterEnabled` | false | Turn on the manual blackout |
-| News | `InpNewsStart*` / `InpNewsEnd*` | 14:15–15:00 | Blackout window (server time), repeats every day while enabled |
-| Display | `InpShowDashboard` | true | On-chart dashboard |
-| Display | `InpVerboseLog` | true | Log a NO TRADE reason on every closed M15 candle |
+**Never judge the EA only on the period you used to choose its settings.**
 
-Fixed by design (constants in the code, not inputs):
-* **Maximum open positions: 1.** Positions on the symbol are counted whatever their magic number, so the EA also won't add to a manual gold trade.
-* A failed order is retried **at most once**, and only for requote or price-changed errors.
+Split your data into two parts:
+
+| Part | Example | Use |
+|------|---------|-----|
+| **In-sample** (development) | 2022-01-01 → 2025-12-31 | Understand the rules, choose settings, and run the comparisons above |
+| **Out-of-sample** (validation) | 2026-01-01 → today | Run **once**, with settings **frozen**, and see whether behaviour is similar |
+
+Why this matters:
+* Every time you change a setting because it improved the in-sample result, you fit the settings a little more to *that* history, noise included. The in-sample result becomes more optimistic than reality.
+* The out-of-sample period is data the settings have never "seen". If results collapse there, the in-sample edge was probably curve-fitting.
+* If you then change settings **after** seeing out-of-sample results, that period is no longer out-of-sample. Treat the **demo forward test** as the next, truly unseen sample.
+* Similar (not identical) behaviour in both periods is encouraging: comparable win rate, average R, drawdown and trade frequency. Much better or much worse is a warning sign.
+
+The dates are examples; use whatever split fits the data you have. A good rule: **decide the split before you start testing.**
 
 ---
 
-## 9. Safety features
+## 11. Statistics, dashboard and logs
 
-| Protection | How |
-|------------|-----|
-| No martingale / no lot increase after losses | Lot size depends only on balance, risk % and SL distance, or on the fixed lot. Past results aren't used. |
-| No grid / no averaging down / no hedging | Maximum 1 open position on the symbol. Opposite trades are impossible while one is open. |
-| No duplicate trades | One evaluation per M15 candle, and the candle is marked as processed *before* evaluation. Open positions are re-checked immediately before every send attempt. Orders are sent synchronously. |
-| Daily loss limit | Realized + floating P/L checked against the day-start balance. When hit, trading is **latched off** until the next server day. |
-| Consecutive-loss limit | Counted from today's closed trades, including costs. Latched off when hit. |
-| Max trades per day | Counted from today's entry deals. Latched off when hit. |
-| Spread filter | Checked right before entry |
-| Margin check | `OrderCalcMargin`. The trade is skipped if it needs more than 90% of free margin. |
-| Lot validation | Rounded down to the lot step. Must be ≥ broker minimum and ≤ min(broker maximum, safety cap), otherwise skipped. |
-| Broker stop level | If SL/TP is inside the broker's minimum stop distance (spread included), the trade is skipped. The SL is never silently widened. |
-| Restart-safe | Daily counters are rebuilt from the account history, so restarting the terminal doesn't reset the limits. |
-| Error handling | Every failed order logs the retcode, its description, the last error, and the lot size, price, SL and TP. |
+### Checklist log (every potential trade)
+```
+[M15 2025.03.12 11:00] SETUP CHECK - BUY
+   Trend    [OK] BULLISH, strong (H1 close 2915.40, EMA55 2909.10, EMA200 2880.35)  +30
+   Zone     [OK] support zone 2905.20-2906.40 (2 reactions)  +25
+   Candle   [OK] bullish rejection candle (long lower wick into support)  +20
+   EMA9     [OK] close 2910.35 > EMA9 2909.80  +15
+   ATR      [OK] ATR 38.5 pips (min 15 / max 120)  +10
+   Entry    [OK] entry 8.4 pips from zone (max 30.0)
+   ...
+   ACTION: BUY
+```
+When something fails:
+```
+[M15 2025.03.12 11:15] SETUP REJECTED - BUY
+   Trend    [OK] BULLISH, strong (...)  +30
+   Zone     [OK] support zone 2905.20-2906.40 (2 reactions)  +25
+   Candle   [OK] bullish engulfing candle  +20
+   EMA9     [X]  close 2908.10 <= EMA9 2909.80
+   ATR      [OK] ATR 36.0 pips (min 15 / max 120)  +10
+   Entry    [OK] entry 12.3 pips from zone (max 30.0)
+   StopLoss [OK] SL 42.0 pips (ATR + beyond zone, max 80) -> TP 168.0 pips (4.0R)
+   Spread   [OK] 2.8 pips (max 5.0)
+   Score    [OK] 85/100 (minimum 70)
+   Time     [OK] inside session (London+NY 10:00-19:00 / 15:00-22:00)
+   Risk     [OK] daily limits OK
+   Position [OK] no open position
+   ACTION: NO TRADE - Reason: EMA9 confirmation missing.
+```
+Markers are ASCII (`[OK]`, `[X]`, and `[--]` for an optional check) so they display correctly in every MT5 log.
+
+Other log lines: `WAIT: ...` (no potential trade on this candle), `TRADE OPENED`, `MANAGE: Break-even ...`, `TRADE CLOSED: ... (+4.00R) WIN`, `DAILY TRADING STOPPED: ...`, `NEW TRADING DAY: ...`, `ORDER ERROR: ...`.
+
+### Dashboard
+The dashboard shows:
+* trend, setup, last score, ATR, spread, and the session (IN or OUT)
+* today's trades, wins, losses and P/L, plus consecutive losses and daily status (ACTIVE / STOPPED / COOLDOWN)
+* the current position (NONE / BUY / SELL, and whether the SL is already protected)
+* risk per trade
+* all-time trades, win rate, profit factor, net, max drawdown, average R, and BUY vs SELL.
+
+### Statistics report (printed when the EA is removed or a backtest ends)
+Calculated only from **this EA's** trades (symbol + magic number), rebuilt from the account history:
+* **Overall:** total trades, wins, losses, win rate, average win, average loss, profit factor, net profit, average R, average entry spread
+* **Max drawdown** (closed trades, money and %), **max consecutive losses**, **average trades per weekday**
+* **BUY vs SELL:** the same metrics
+* **Session:** London only / London–NY overlap / New York only / other hours, by entry time, using the London and New York windows
+
+**R multiple** = net result ÷ money at risk with the initial SL. For example, +4.0R is a full TP, −1.0R a full SL, and ~0R a break-even exit.
+
+### CSV trade list
+If `Write trade CSV` = true, `GoldBotV2_trades_<symbol>_<magic>.csv` is written to the **Common Data Folder** (`File → Open Data Folder`, go up one level to `Common/Files`). It's written in live trading and in the tester. It has one row per trade: direction, session, times, prices, initial SL, lots, spread at entry, net, R, and exit type. Open it in Excel or Google Sheets for your own analysis.
 
 ---
 
-## 10. Reading the log
+## 12. Example backtest interpretation
 
-Examples of what you'll see in **Experts** (live) or **Journal** (tester):
+> The numbers below are **invented for illustration**. They are **not** real GoldBot results.
 
 ```
-[M15 2025.03.12 10:15] NO TRADE: H1 trend unclear (H1 close=2915.40, EMA55=2921.10, EMA200=2908.35).
-[M15 2025.03.12 10:30] NO TRADE: Price not near support (support=2911.20, recent low=2916.85, 56.5 pips away, tolerance 10.0 pips).
-[M15 2025.03.12 10:45] NO TRADE: No bullish confirmation at support 2911.20 (no engulfing, rejection or strong bullish close).
-[M15 2025.03.12 11:00] NO TRADE: BUY setup found but blocked - Spread too high (7.2 pips > max 5.0 pips).
-[M15 2025.03.12 11:15] TRADE: BUY XAUUSD
-   Reason: Bullish H1 trend + support at 2911.20 + bullish engulfing candle.
-   Lots=0.10  Entry=2912.35  SL=2909.85 (25.0 pips)  TP=2924.85 (125.0 pips)  Risk~25.00 USD (0.25% of balance)  Deal #123456
-TRADE CLOSED: XAUUSD position #123455 hit Stop Loss | Net result: -25.40 USD (LOSS)
-DAILY TRADING STOPPED: Consecutive loss limit reached (3 losses in a row). No new trades until the next server day.
-NEW TRADING DAY: counters reset for 2025.03.13. Day-start balance: 9924.60 USD
+ALL               : 180 trades | W 49 / L 118 | win 27.2% | net 1,420.00 | PF 1.25 | avg win 146.10 | avg loss -48.63 | avg R +0.14 | avg spread 2.6
+Max drawdown (closed trades): 910.00 USD (8.6%) | Max consecutive losses: 11 | Avg trades per weekday: 0.35
+BUY               : 131 trades | ... | net 1,690.00 | PF 1.42 | avg R +0.22
+SELL              :  49 trades | ... | net -270.00 | PF 0.88 | avg R -0.09
+London only       :  52 trades | ... | avg R +0.05
+London/NY overlap :  81 trades | ... | avg R +0.25
+New York only     :  47 trades | ... | avg R +0.06
 ```
 
-The dashboard shows the trend, setup state, today's trades, today's P/L, consecutive losses, whether daily trading is enabled or stopped, the current spread, SL/TP, and the last decision.
+How to read it:
+* **Win rate 27% with 4R targets.** That's plausible for this design. Break-even for a pure 4R system is about 20%, but break-even exits (~0R) and costs change the maths, so look at **average R** instead. Here +0.14R per trade is a thin edge. Spread and slippage can erase that.
+* **13 trades aren't wins or losses.** Those are break-even exits (180 − 49 − 118). That's normal with break-even on.
+* **11 losses in a row.** Low-win-rate systems produce long losing streaks. At 0.25% risk that's about −2.75%. Could you sit through it without interfering?
+* **BUY positive, SELL negative.** Is that the strategy, or just that gold rose in the test period? Check the **same** split on a period where gold fell before concluding "BUY only".
+* **Overlap best.** That's plausible (most liquidity), but 81 trades is a small sample. See whether it holds **out-of-sample** before restricting sessions.
+* **0.35 trades per weekday.** The bot skipped most days. That's by design, not a bug.
+* **Profit factor 1.25 over 180 trades.** Encouraging but fragile. Re-run with a higher tester spread. If PF drops below ~1.1, the edge is probably too small for real conditions.
+
+**Conclusion for this invented example:** worth a **demo forward test** with frozen settings. It is **not** a reason to go live, and not a reason to start tuning until the numbers look better.
 
 ---
 
-## 11. Interpreting backtest results
+## 13. Recommended demo testing procedure
 
-Look at more than net profit:
+1. **Freeze settings** after your backtests. Write them down, or save a `.set` file from the Inputs tab.
+2. Run **GoldBotV2 on a demo account** for at least **8 weeks** on a VPS or an always-on computer. Longer and more trades is better.
+3. **Daily (5 minutes):** read the Experts log. For every `TRADE OPENED`, look at the chart. Do the checklist lines match what you see? Note anything surprising.
+4. **Weekly:** remove and re-attach the EA (or check the dashboard) to see the statistics report. Compare the win rate, average R, average spread and trades per day with your backtest.
+5. **Compare demo with a backtest of the same weeks.** Large differences usually come from spread, slippage, server time or execution. Investigate before changing any strategy setting.
+6. **Change at most one thing at a time**, and only for a clear reason. After a change, the forward test starts again.
 
-| Metric (tester report) | What to look for |
-|------------------------|------------------|
-| **Total trades** | Enough to mean anything. Fewer than ~100 trades is statistically weak. |
-| **Profit trades %** (win rate) | With 1:5 R:R, break-even before costs is about **16.7%**. Spread and commission push that higher. |
-| **Profit factor** | Gross profit ÷ gross loss. Values near 1.0 are fragile. |
-| **Maximal drawdown** | Could you live with it on a real account? |
-| **Max consecutive losses** | Long losing streaks are normal with a 1:5 design, so be ready for them. |
-| **Expected payoff** | Average result per trade. Compare it with your average spread cost. |
-| **Graph** | A steady curve is better than one big lucky trade. |
-
-Good habits:
-* Test **several separate periods** (for example 2022, 2023, 2024, 2025) and see whether behaviour is consistent.
-* Test with a **higher spread** (use a fixed spread in the tester, for example 30–50 points on a 2-digit symbol) and see whether results survive.
-* Compare `Use wider test SL` = false vs true.
-* **Don't** tune parameters until one period looks great. That's overfitting, and it usually fails on new data.
-* Remember that the tester can't fully model news spikes, requotes or slippage on your broker.
-
----
-
-## 12. Demo forward test
-
-1. Run the EA on a **demo** account for **at least 4–8 weeks** (longer is better), on a VPS or a computer that stays on.
-2. Use the same settings as your backtest.
-3. Every day, check the Experts log. Do the `TRADE:` reasons match what you see on the chart?
-4. Every week, compare the demo results with a backtest over the same weeks. Large differences usually point to spread, slippage or execution issues.
-5. Write down every trade that surprised you, and why.
-
----
-
-## 13. Demo testing checklist
-
-**Before starting**
-- [ ] The EA compiles with 0 errors in MetaEditor
-- [ ] Attached to a **demo** account, on the gold chart, with Algo Trading enabled (green)
-- [ ] Startup log shows the correct symbol and `1 pip = 0.10 price` (or your chosen pip size)
-- [ ] Startup log shows sensible SL/TP price distances and "Money at risk per 1.00 lot"
-- [ ] The broker's server time zone is known, and trading hours are adjusted if needed
+### Demo checklist
+**Setup**
+- [ ] Compiles with 0 errors
+- [ ] Demo account, gold chart, Algo Trading green
+- [ ] Startup log: correct symbol, `1 pip = 0.10 price`, sensible "Value of 1 pip" per lot
+- [ ] Session times match your broker's server time
+- [ ] ATR limits make sense for current volatility (check the dashboard ATR)
 - [ ] `Max spread` suits your broker's normal gold spread
-- [ ] Magic number is unique if you run other EAs
 
-**Behaviour to verify on demo**
-- [ ] The dashboard updates and shows the trend, spread and daily stats
-- [ ] A `NO TRADE:` or `TRADE:` line appears once per M15 candle (verbose on), not on every tick
-- [ ] No trade opens when the H1 trend is NEUTRAL
-- [ ] BUYs only happen in a BULLISH trend, and SELLs only in a BEARISH one
-- [ ] Never more than **one** gold position open at a time
-- [ ] Every trade has an SL and a TP attached at entry
-- [ ] Lot size matches the expected risk (check `Risk~` in the log)
-- [ ] No trades outside trading hours, or inside the news blackout when enabled
-- [ ] After 3 losses in a row, "DAILY TRADING STOPPED" appears and no new trades open that day
-- [ ] The daily loss limit stops new trades when reached
-- [ ] Counters reset on the new server day ("NEW TRADING DAY" in the log)
-- [ ] Restarting the terminal mid-day keeps today's counters (they're rebuilt from history)
-- [ ] Order errors, if any, are logged with a clear retcode
-
-**Before considering anything beyond demo**
-- [ ] At least 4–8 weeks and a meaningful number of trades on demo
-- [ ] Demo results are in line with backtests over the same period
-- [ ] You understand every losing streak and the worst drawdown
-- [ ] You accept that past results don't guarantee future results
+**Behaviour**
+- [ ] At most one `SETUP CHECK` / `WAIT` decision per M15 candle, never per tick
+- [ ] No trades with a NEUTRAL trend, and none against the H1 trend
+- [ ] No trade when EMA 9, ATR, spread, session, score or max SL fails, and the log says which
+- [ ] Never more than one gold position
+- [ ] Every trade has SL and TP at entry. TP ≈ SL × `Risk reward`
+- [ ] The lot size matches the expected risk (`Risk~` line)
+- [ ] Break-even moves the SL once at +1R, and it never moves back
+- [ ] After a loss, no new trade during the cooldown
+- [ ] Daily loss, profit, consecutive-loss and trades/day limits stop new trades, and the log says why
+- [ ] Counters reset on the new server day, and survive a terminal restart
+- [ ] The statistics report and CSV are produced when the EA is removed
 
 ---
 
-## 14. Known limitations (V1)
+## 14. All parameters
 
-* **No real news filter.** Only a manual daily time window. It doesn't know when news is actually scheduled, and it repeats every day while enabled.
-* **Fixed SL/TP.** They don't adapt to volatility. A 25-pip stop can be too tight in fast markets and too loose in quiet ones.
-* **No trade management.** No trailing stop, break-even or partial close (by design for V1).
-* **Simple S/R.** Swing points only: no volume, no multi-timeframe zones, no zone strength scoring. Some valid levels will be missed, and some weak ones used.
-* **The SL is not tied to the zone.** It's a fixed distance from entry, so it can sit inside or outside the support/resistance level depending on the candle.
-* **Server-time day.** Daily limits reset at 00:00 broker server time, which may not match your local time.
-* **Positions carried over midnight:** their whole floating P/L (including yesterday's part) counts towards today's loss limit, and their close counts as today's realized result. This errs on the cautious side.
-* **Daily stats count only this EA's trades** (by magic number and symbol). The position limit counts **all** positions on the symbol.
-* **Weekend gaps and news spikes** can fill an SL at a worse price than planned, so real losses can exceed the planned risk.
-* **Commission is not included in lot sizing**, and the floating P/L doesn't include the exit commission, so the real risk per trade is slightly higher on commission accounts.
-* **Risk % uses balance**, not equity.
-* **Evaluation happens on the first tick after an M15 candle closes.** On a quiet market that tick can arrive a little late.
-* **Tester limitations:** the tester's spread and slippage model is simplified and can't reproduce your broker's real execution.
-* **Not compiled in this repository's CI.** Compile it yourself in MetaEditor, and report any errors.
+| Group | Input | Default | Explanation |
+|-------|-------|---------|-------------|
+| Symbol | `InpSymbol` | *(empty)* | Symbol to trade. Empty means the chart symbol, or auto-detect `XAUUSD*` / `GOLD*` |
+| Symbol | `InpPipSize` | 0 | Price value of 1 pip. 0 means automatic (0.10 for gold) |
+| Direction | `InpAllowBuy` | true | Allow BUY trades |
+| Direction | `InpAllowSell` | true | Allow SELL trades |
+| Trend | `InpTrendFastEMA` | 55 | H1 fast EMA for the trend |
+| Trend | `InpTrendSlowEMA` | 200 | H1 slow EMA for the trend |
+| Timing | `InpEntryEMA` | 9 | M15 EMA used **only** for entry timing |
+| Timing | `InpRequireEMAConfirm` | true | true: the close must be beyond the EMA. false: only affects the score |
+| Volatility | `InpATRPeriod` | 14 | M15 ATR period |
+| Volatility | `InpMinATRPips` | 15 | No trade if ATR is below this (dead market) |
+| Volatility | `InpMaxATRPips` | 120 | No trade if ATR is above this (chaos). 0 means off |
+| Zones | `InpSwingStrength` | 3 | Candles on each side that define a swing high/low |
+| Zones | `InpSwingLookbackBars` | 150 | How many M15 candles back to look for swings (~37 hours) |
+| Zones | `InpZoneMergePips` | 15 | Swings within this distance are merged into one zone (more reactions) |
+| Zones | `InpZoneDistancePips` | 20 | How close price must come to the zone, and how far past it counts as broken |
+| Zones | `InpMaxDistanceFromZonePips` | 30 | Don't chase: maximum entry distance from the zone |
+| Score | `InpMinScore` | 70 | Minimum quality score (0–100) |
+| SL/TP | `InpSLMode` | ATR | *Fixed pips* or *ATR × multiplier* |
+| SL/TP | `InpFixedSLPips` | 25 | SL distance in fixed mode |
+| SL/TP | `InpATRSLMultiplier` | 1.0 | SL = ATR × this in ATR mode |
+| SL/TP | `InpUseStructureSL` | true | Push the SL beyond the zone and the reaction candles when that's further |
+| SL/TP | `InpSLBufferPips` | 5 | Extra distance beyond the zone for the structure SL |
+| SL/TP | `InpMaxStopLossPips` | 80 | If the required SL is larger, **no trade** |
+| SL/TP | `InpRiskReward` | 4.0 | TP = SL distance × this (1–10) |
+| Management | `InpBreakEvenEnabled` | true | Move the SL to break-even |
+| Management | `InpBreakEvenAtR` | 1.0 | Profit (in R) that triggers break-even |
+| Management | `InpBreakEvenBufferPips` | 2 | The break-even SL sits this far beyond entry |
+| Management | `InpTrailingEnabled` | false | Enable the ATR trailing stop |
+| Management | `InpTrailStartR` | 2.0 | Profit (in R) before trailing starts |
+| Management | `InpTrailATRMultiplier` | 2.0 | Trailing distance = ATR × this |
+| Lots | `InpLotMode` | Risk-based | *Risk-based* or *Fixed lot* |
+| Lots | `InpRiskPercent` | 0.25 | % of the lower of balance and equity risked per trade (max 5) |
+| Lots | `InpFixedLotSize` | 0.01 | Lot size in fixed mode |
+| Lots | `InpMaxLotSize` | 1.00 | Hard cap on any order's lot size |
+| Daily | `InpMaxDailyLossPercent` | 2.0 | Stop for the day at this loss (realized + floating) |
+| Daily | `InpMaxDailyProfitPercent` | 3.0 | Stop for the day at this profit. 0 means off |
+| Daily | `InpMaxConsecutiveLosses` | 3 | Stop for the day after this many losses in a row |
+| Daily | `InpMaxTradesPerDay` | 3 | Max new trades per day |
+| Daily | `InpCooldownAfterLossMinutes` | 30 | Minutes without new entries after a losing trade. 0 means off |
+| Execution | `InpMaxSpreadPips` | 5 | No trade if the spread is above this. Also checked again right before sending |
+| Execution | `InpMaxSlippagePips` | 3 | Maximum accepted slippage |
+| Execution | `InpMagicNumber` | 55200226 | Identifies this EA's trades and statistics |
+| Sessions | `InpSessionMode` | London + New York | London / New York / London+NY / Custom |
+| Sessions | `InpLondonSession` | 10:00-19:00 | London window (server time). Also used for statistics |
+| Sessions | `InpNewYorkSession` | 15:00-22:00 | New York window (server time). Also used for statistics |
+| Sessions | `InpCustomSession` | 09:00-21:00 | Used when the mode is Custom |
+| News | `InpNewsFilterEnabled` | false | Enable the manual daily blackout |
+| News | `InpNewsStartTime` | 15:25 | Blackout start (server time) |
+| News | `InpNewsEndTime` | 16:00 | Blackout end (server time) |
+| Display | `InpShowDashboard` | true | On-chart dashboard |
+| Display | `InpVerboseLog` | true | Log a `WAIT:` line on every candle without a potential trade. Checklists are always logged. |
+| Display | `InpWriteTradeCSV` | true | Write the CSV trade list when the EA stops |
+
+Time windows are `HH:MM-HH:MM`, the end time is not included, windows may cross midnight, and `24:00` is allowed as an end time.
+
+Fixed by design (constants at the top of the source): candle-shape ratios, the candle ≥ 50% of ATR rule, the score weights, max 1 position, one retry, 90% margin usage, and the trailing step of 10% of risk.
 
 ---
 
-## 15. What V1 deliberately doesn't do
+## 15. Known limitations
 
-No AI or machine learning, no neural networks, no sentiment analysis, no complicated indicators, no news APIs, no martingale, no grid, no hedging, no averaging down, no recovery trading, and no lot increase after a loss.
+* **The news filter is manual.** It's one daily time window, with no calendar. You must update it for each event, and it repeats every day while enabled.
+* **Simple zones.** Swing points only: no volume, no higher-timeframe zones. Some meaningful levels are missed, and some weak ones used.
+* **The score is a heuristic.** The weights are reasonable defaults, not proven values.
+* **Session defaults assume a GMT+2/+3 server** and ignore daylight-saving differences between the UK/US and your broker. Adjust them yourself.
+* **Server-time day.** Daily limits reset at 00:00 server time. A position held over midnight counts its whole floating P/L towards the new day.
+* **Daily and all-time statistics count only this EA's trades.** Max drawdown is closed-trade drawdown of this EA (the tester report shows account drawdown including floating).
+* **Commission isn't included in lot sizing** (it is included in P/L and R). Real risk per trade is slightly higher on commission accounts.
+* **Gaps, news spikes and slippage** can fill SLs worse than planned, so a loss can exceed −1R.
+* **Break-even and trailing act on ticks.** In the tester, results depend on the modelling mode. Use real ticks.
+* **The SL is anchored to the price at send time.** On a retry after a requote, the SL keeps the same *distance*, so it can shift by the requote amount.
+* **Evaluation happens on the first tick after an M15 close**, which can be slightly late on quiet markets.
+* **Tester limitations:** simplified spread and slippage, no real liquidity.
+* **Not compiled in this repository.** Compile it in MetaEditor, and report any errors or warnings.
