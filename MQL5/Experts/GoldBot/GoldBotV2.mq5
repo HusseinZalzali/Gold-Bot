@@ -473,11 +473,11 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       return;
    if(HistoryDealGetString(trans.deal, DEAL_SYMBOL) != g_symbol)
       return;
-   if((ulong)HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != InpMagicNumber)
-      return;
-
    ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
    long positionId       = HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
+   // Our deals, or a manual close (magic 0) of one of our positions
+   if((ulong)HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != InpMagicNumber && FindTradeIndex(positionId) < 0)
+      return;
 
    RebuildStatistics();
 
@@ -1843,14 +1843,15 @@ void RebuildStatistics()
          continue;
       if(HistoryDealGetString(ticket, DEAL_SYMBOL) != g_symbol)
          continue;
-      if((ulong)HistoryDealGetInteger(ticket, DEAL_MAGIC) != InpMagicNumber)
-         continue;
       ENUM_DEAL_TYPE type = (ENUM_DEAL_TYPE)HistoryDealGetInteger(ticket, DEAL_TYPE);
       if(type != DEAL_TYPE_BUY && type != DEAL_TYPE_SELL)
          continue;
 
       ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
       long   posId = HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
+      // Entries must carry our magic; exits are matched by position id (a manual close has magic 0)
+      if(entry == DEAL_ENTRY_IN && (ulong)HistoryDealGetInteger(ticket, DEAL_MAGIC) != InpMagicNumber)
+         continue;
       double net   = HistoryDealGetDouble(ticket, DEAL_PROFIT)
                      + HistoryDealGetDouble(ticket, DEAL_SWAP)
                      + HistoryDealGetDouble(ticket, DEAL_COMMISSION);
