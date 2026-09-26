@@ -483,6 +483,8 @@ Fixed by design (constants at the top of the source): candle-shape ratios, the c
 * **Server-time day.** Daily limits reset at 00:00 server time. A position held over midnight counts its whole floating P/L towards the new day.
 * **Daily and all-time statistics count only this EA's trades.** Max drawdown is closed-trade drawdown of this EA (the tester report shows account drawdown including floating).
 * **Commission isn't included in lot sizing** (it is included in P/L and R). Real risk per trade is slightly higher on commission accounts.
+* **A break-even exit that ends slightly negative** (commission or slippage bigger than the break-even buffer) counts as a loss. It triggers the cooldown and adds to the consecutive-loss count. Raise `Break-even buffer` if that happens often.
+* **Zone choice:** the EA tests only the nearest zone below or above the last close. If a wick pierces that zone and bounces from a lower one, the setup is rejected as "broken".
 * **Gaps, news spikes and slippage** can fill SLs worse than planned, so a loss can exceed −1R.
 * **Break-even and trailing act on ticks.** In the tester, results depend on the modelling mode. Use real ticks.
 * **The SL is anchored to the price at send time.** On a retry after a requote, the SL keeps the same *distance*, so it can shift by the requote amount.

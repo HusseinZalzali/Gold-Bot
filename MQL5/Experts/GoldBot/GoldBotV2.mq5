@@ -508,6 +508,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 //+------------------------------------------------------------------+
 void EvaluateNewBar()
   {
+   RebuildStatistics();           // never rely only on trade events for limits/cooldown
    ManageDailyLimits();
    UpdateATR();
    g_setupState = SETUP_WAITING;
@@ -1517,19 +1518,26 @@ double CalculateLotSize(bool isBuy, double entry, double sl, double &riskMoney, 
       rawLots = riskBudget / lossPerLot;
      }
 
-   double lots = FloorToStep(rawLots, lotStep);
-   double cap  = MathMin(maxLot, InpMaxLotSize);
-   if(lots > cap)
+   double cap = MathMin(maxLot, InpMaxLotSize);
+   if(rawLots > cap)
      {
-      Print(g_candleLabel, "NOTE: lot size ", DoubleToString(lots, 2), " capped to ", DoubleToString(cap, 2),
+      Print(g_candleLabel, "NOTE: lot size ", DoubleToString(rawLots, 2), " capped to ", DoubleToString(cap, 2),
             " (broker max / safety cap).");
-      lots = FloorToStep(cap, lotStep);
+      rawLots = cap;
      }
-   if(lots < minLot)
+   if(rawLots < minLot)
      {
       reason = StringFormat("Calculated lot %.4f is below the broker minimum %.2f. "
                             "Risk is too small for this stop loss - trade skipped (lots are never rounded up).",
                             rawLots, minLot);
+      return(0.0);
+     }
+   // Valid volumes are minLot + n x step: round DOWN on that grid
+   double lots = minLot + FloorToStep(rawLots - minLot, lotStep);
+   lots = NormalizeDouble(lots, StepDigits(lotStep));
+   if(lots > rawLots + 1e-9 || lots < minLot)
+     {
+      reason = "Could not fit the lot size to the broker's volume step.";
       return(0.0);
      }
    riskMoney = lots * lossPerLot;
@@ -1629,6 +1637,13 @@ bool OpenTrade(const SetupCheck &c, const string reason)
       if(spreadPips > InpMaxSpreadPips)
         {
          LogDecision(StringFormat("NO TRADE: %s aborted - spread widened to %.1f pips.", direction, spreadPips), true);
+         return(false);
+        }
+
+      double minStop = (double)SymbolInfoInteger(g_symbol, SYMBOL_TRADE_STOPS_LEVEL) * g_point;
+      if(slDist - (tick.ask - tick.bid) <= minStop)
+        {
+         LogDecision("NO TRADE: " + direction + " aborted - SL inside the broker's minimum stop level.", true);
          return(false);
         }
 
@@ -1766,7 +1781,9 @@ void ManageOpenPosition()
       double freezeLevel = (double)SymbolInfoInteger(g_symbol, SYMBOL_TRADE_FREEZE_LEVEL) * g_point;
       double gapToNewSL  = (isBuy ? price - newSL : newSL - price);
       double gapToOldSL  = (isBuy ? price - sl : sl - price);
-      if(gapToNewSL <= stopsLevel || (freezeLevel > 0.0 && gapToOldSL <= freezeLevel))
+      double gapToTP     = (tp > 0.0 ? MathAbs(tp - price) : DBL_MAX);
+      if(gapToNewSL <= stopsLevel ||
+         (freezeLevel > 0.0 && (gapToOldSL <= freezeLevel || gapToTP <= freezeLevel)))
          continue;
 
       if(g_trade.PositionModify(ticket, newSL, tp))
@@ -2029,15 +2046,20 @@ void ComputeOverallStats()
 
 int CountWeekdays(datetime from, datetime to)
   {
-   datetime day = (datetime)(((long)from / 86400) * 86400);
-   int count = 0;
-   while(day <= to)
+   long firstDay = (long)from / 86400;
+   long lastDay  = (long)to / 86400;
+   if(lastDay < firstDay)
+      return(0);
+   long days  = lastDay - firstDay + 1;
+   int  count = (int)(days / 7) * 5;               // full weeks
+   MqlDateTime dt;
+   TimeToStruct((datetime)(firstDay * 86400), dt);
+   int dow = dt.day_of_week;                        // 0 = Sunday
+   for(long r = 0; r < days % 7; r++)               // remaining days
      {
-      MqlDateTime dt;
-      TimeToStruct(day, dt);
-      if(dt.day_of_week >= 1 && dt.day_of_week <= 5)
+      int d = (int)((dow + r) % 7);
+      if(d >= 1 && d <= 5)
          count++;
-      day += 86400;
      }
    return(count);
   }
