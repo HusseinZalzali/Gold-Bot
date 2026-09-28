@@ -6,7 +6,7 @@
 //|    SCALP M5  : M15 trend + pullback to the M5 EMA 21 + M5        |
 //|                reaction candle + EMA 9 timing, 1.5R targets      |
 //|    SWING M15 : H1 trend + M15 swing S/R zone + reaction candle   |
-//|                + EMA 9 timing, 4R targets (V3 logic)             |
+//|                + EMA 9 timing, 4R (V3 rules, ATR-scaled limits)  |
 //|                                                                  |
 //|  V4 fixes the V3 problem found in testing: distance limits in    |
 //|  fixed pips blocked every setup once gold volatility doubled.    |
@@ -82,7 +82,7 @@ enum ENUM_SESSION_MODE
 enum ENUM_PROFILE
   {
    PROFILE_SCALP_M5  = 0, // Scalp M5 (fast, more trades, 1.5R)
-   PROFILE_SWING_M15 = 1, // Swing M15 (V3 logic, 4R)
+   PROFILE_SWING_M15 = 1, // Swing M15 (V3 rules, ATR-scaled distances, 4R)
    PROFILE_CUSTOM    = 2  // Custom (use the inputs marked [custom])
   };
 
@@ -276,6 +276,7 @@ const int    SCORE_TREND_STRONG      = 30;
 const int    SCORE_TREND_PULLBACK    = 15;
 const int    SCORE_ZONE_MULTI        = 25;
 const int    SCORE_ZONE_SINGLE       = 10;
+const int    SCORE_ZONE_EMA          = 15;    // pullback to the entry-timeframe EMA (scalp)
 const int    SCORE_CANDLE_REACTION   = 20;
 const int    SCORE_CANDLE_STRONG     = 10;
 const int    SCORE_EMA_CONFIRM       = 15;
@@ -889,7 +890,10 @@ void EvaluateNewBar()
    check.trendScore  = trendScore;
    check.trendClass  = trendClass;
    check.zoneTouches = zone.touches;
-   check.zoneScore   = (zone.touches >= 2 ? SCORE_ZONE_MULTI : SCORE_ZONE_SINGLE);
+   if(g_zoneSource == ZONE_EMA_PULLBACK)
+      check.zoneScore = SCORE_ZONE_EMA;
+   else
+      check.zoneScore = (zone.touches >= 2 ? SCORE_ZONE_MULTI : SCORE_ZONE_SINGLE);
    if(g_zoneSource == ZONE_EMA_PULLBACK)
       check.zoneText = StringFormat("pullback to %s EMA%d %s and close back %s it", TFName(g_entryTF), g_pullbackEMA,
                                     FormatPrice(zone.bottom), (isBuy ? "above" : "below"));
@@ -1505,7 +1509,8 @@ void CheckATR(SetupCheck &c)
    double ratio      = (g_atrAverage > 0.0 ? g_atr / g_atrAverage : 1.0);
    c.atrText = StringFormat("ATR %.1f pips, regime %s (x%.2f of 24h avg); min %s, spike limit %s",
                             atrPips, RegimeName(g_atrRegime), ratio,
-                            (InpMinATRToSpread > 0.0 ? StringFormat("%.1f pips (spread x%.1f)", spreadPips * InpMinATRToSpread, InpMinATRToSpread) : "off"),
+                            (InpMinATRToSpread <= 0.0 ? "off" : (spreadPips <= 0.0 ? "n/a (no spread)" :
+                             StringFormat("%.1f pips (spread x%.1f)", spreadPips * InpMinATRToSpread, InpMinATRToSpread))),
                             (InpMaxATRSpikeRatio > 0.0 ? StringFormat("x%.1f", InpMaxATRSpikeRatio) : "off"));
 
    if(InpMinATRToSpread > 0.0 && spreadPips > 0.0 && atrPips < spreadPips * InpMinATRToSpread)
@@ -3721,7 +3726,7 @@ bool ValidateInputs()
      { Print("INPUT ERROR: entry EMA and ATR periods must be > 0."); ok = false; }
    if(InpMinATRToSpread < 0.0 || InpMaxATRSpikeRatio < 0.0 || (InpMaxATRSpikeRatio > 0.0 && InpMaxATRSpikeRatio <= 1.0))
      { Print("INPUT ERROR: ATR/spread ratio must be >= 0 and the spike ratio 0 (off) or above 1.0."); ok = false; }
-   if(g_pullbackEMA <= 0 || g_pullbackEMA <= InpEntryEMA)
+   if(g_zoneSource == ZONE_EMA_PULLBACK && (g_pullbackEMA <= 0 || g_pullbackEMA <= InpEntryEMA))
      { Print("INPUT ERROR: pullback EMA must be > 0 and longer than the entry timing EMA."); ok = false; }
    if(PeriodSeconds(g_trendTF) < PeriodSeconds(g_entryTF))
      { Print("INPUT ERROR: trend timeframe must not be shorter than the entry timeframe."); ok = false; }
@@ -3735,8 +3740,8 @@ bool ValidateInputs()
      { Print("INPUT ERROR: minimum score must be 0-100."); ok = false; }
    if(InpFixedSLPips <= 0.0 || InpATRSLMultiplier <= 0.0 || InpSLBufferATR < 0.0 || InpMaxStopLossATR <= 0.0)
      { Print("INPUT ERROR: SL settings must be positive (buffer may be 0)."); ok = false; }
-   if(InpSLMode == SL_MODE_ATR && InpATRSLMultiplier > InpMaxStopLossATR)
-     { Print("INPUT ERROR: ATR SL multiplier is larger than the maximum SL multiple, so no trade could ever be taken."); ok = false; }
+   if(InpSLMode == SL_MODE_ATR && InpATRSLMultiplier >= InpMaxStopLossATR)
+     { Print("INPUT ERROR: ATR SL multiplier must be below the maximum SL multiple, otherwise almost no trade can be taken."); ok = false; }
    if(g_riskReward < 1.0 || g_riskReward > 10.0)
      { Print("INPUT ERROR: risk:reward must be between 1.0 and 10.0."); ok = false; }
    if(InpBreakEvenAtR <= 0.0 || InpBreakEvenBufferPips < 0.0)
@@ -3775,7 +3780,12 @@ bool ValidateInputs()
 
    // Testing-only settings are allowed but announced loudly
    if(InpTrendMode == TREND_MODE_OFF)
-      Print("TEST MODE: trend filter is OFF. Trend score is 0, so the maximum score is 70.");
+      Print("TEST MODE: trend filter is OFF. Trend score is 0, so the maximum score is 70 (60 with EMA-pullback zones).");
+   if(InpSLMode == SL_MODE_ATR && InpMaxStopLossATR - InpATRSLMultiplier < 0.5)
+      Print("NOTE: max SL multiple is close to the ATR SL multiplier; structure stops will often exceed it.");
+   if(InpSLMode == SL_MODE_FIXED)
+      Print("NOTE: fixed SL mode still obeys the ATR-based maximum SL (ATR x ", DoubleToString(InpMaxStopLossATR, 1),
+            "), so in quiet markets the fixed SL can be rejected as too large.");
    if(InpSessionMode == SESSION_ALL_DAY)
       Print("TEST MODE: session filter is OFF (all day).");
    if(InpMaxDailyLossPercent == 0.0 || g_maxConsecLosses == 0 || g_maxTradesPerDay == 0)

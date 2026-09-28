@@ -42,13 +42,13 @@ The pip limits in V3 were sized for gold at about $2,000–2,600. At about $4,20
 
 Choose one input: **`InpProfile`**. Each profile sets the values in the table below. The inputs marked **[custom]** are only used with the **Custom** profile.
 
-| Setting | **Scalp M5** (default) | **Swing M15** (V3 logic) |
+| Setting | **Scalp M5** (default) | **Swing M15** (V3 rules, ATR-scaled limits) |
 |---------|------------------------|--------------------------|
 | Entry timeframe (evaluated once per closed candle) | **M5** | M15 |
 | Trend timeframe and EMAs | **M15** EMA 50 / 200 | H1 EMA 55 / 200 |
 | Where it enters | **Pullback to the M5 EMA 21** | Swing support/resistance zone |
 | Target | **1.5R** | 4R |
-| Min score | 60 | 70 |
+| Min score (EMA-pullback zone scores 15 points) | 60 | 70 |
 | Max trades per day | **20** | 3 |
 | Stop after consecutive losses | 5 | 3 |
 | Cooldown after a loss | 10 min | 30 min |
