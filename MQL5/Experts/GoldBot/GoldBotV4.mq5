@@ -507,7 +507,7 @@ int               g_yearKeys[];
 GroupStats        g_statYear[];
 int               g_monthKeys[];
 GroupStats        g_statMonth[];
-int               g_maxConsecLosses   = 0;
+int               g_statMaxConsecLosses   = 0;
 double            g_longestDDDays     = 0.0;
 double            g_maxDDPct          = 0.0;
 double            g_avgTradesPerDay   = 0.0;
@@ -2977,7 +2977,7 @@ void ComputeFullStatistics()
    ArrayResize(g_monthKeys, 0);
    ArrayResize(g_statMonth, 0);
 
-   g_maxConsecLosses = 0;
+   g_statMaxConsecLosses = 0;
    g_longestDDDays   = 0.0;
    g_maxDDPct        = 0.0;
    g_avgTradesPerDay = 0.0;
@@ -3060,8 +3060,8 @@ void ComputeFullStatistics()
       if(t.outcome == OUTCOME_LOSS)
         {
          consecutive++;
-         if(consecutive > g_maxConsecLosses)
-            g_maxConsecLosses = consecutive;
+         if(consecutive > g_statMaxConsecLosses)
+            g_statMaxConsecLosses = consecutive;
         }
       else
          consecutive = 0;
@@ -3204,7 +3204,7 @@ void BuildReport(string &lines[])
    AddLine(lines, StringFormat("Max drawdown (closed trades) %.2f %s (%.2f%%) | Recovery factor %s | Longest drawdown %.0f days",
                                a.maxDD, cur, g_maxDDPct, (a.maxDD > 0.0 ? DoubleToString(net / a.maxDD, 2) : "n/a"),
                                g_longestDDDays));
-   AddLine(lines, StringFormat("Max consecutive losses %d | Average trades per weekday %.2f", g_maxConsecLosses, g_avgTradesPerDay));
+   AddLine(lines, StringFormat("Max consecutive losses %d | Average trades per weekday %.2f", g_statMaxConsecLosses, g_avgTradesPerDay));
 
    int positiveMonths = 0, longestNegMonths = 0, negRun = 0;
    for(int i = 0; i < ArraySize(g_monthKeys); i++)
